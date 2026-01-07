@@ -136,6 +136,31 @@ class DiscordNotifier:
         except Exception as e:
             print(f"Failed to send Discord notification for {ticker}: {e}")
 
+    def send_recommendations(self, recommendation_text):
+        """
+        Sends the weekly AI recommendation report.
+        """
+        if not self.webhook_url or not recommendation_text:
+            return
+
+        embed = {
+            "title": "🧠 AI Weekly Market Picks",
+            "description": recommendation_text,
+            "color": 0x9b59b6, # Purple
+            "footer": {"text": f"Stock Sentinel AI • {datetime.now().strftime('%Y-%m-%d')}"}
+        }
+        
+        payload = {
+            "username": "Sentinel Strategist 🔮",
+            "embeds": [embed]
+        }
+        
+        try:
+            requests.post(self.webhook_url, json=payload)
+            print("  -> AI Recommendations sent to Discord.")
+        except Exception as e:
+            print(f"Failed to send recommendations: {e}")
+
     def _get_color(self, severity):
         colors = {
             "success": 0x2ecc71, # Green

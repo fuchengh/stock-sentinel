@@ -98,6 +98,47 @@ def main():
 
     # 4. Send Notification
     notifier.send_report(results)
+
+    # 5. Weekly AI Recommendations
+    if mode == 'WEEKLY':
+        print("🔮 Generating weekly AI market recommendations...")
+        candidates = ai_analyst.get_ticker_candidates()
+        print(f"  -> AI suggested candidates: {candidates}")
+        
+        verified_picks = []
+        for cand in candidates:
+            cand = cand.upper()
+            if cand in watchlist:
+                continue # Already analyzed
+            
+            print(f"  -> Validating candidate {cand} with Engineer Strategy...")
+            df_cand = loader.get_weekly_bars(cand)
+            if df_cand is None:
+                print(f"    -> No data found for {cand}. Skipping.")
+                continue
+                
+            analysis_cand = engineer_strategy.analyze(df_cand)
+            
+            # We filter for positive or interesting setups.
+            # Engineer Strategy returns: BUY (success), PROFIT (warning), HOLD (info/warning), SELL (danger)
+            # We want to recommend things that are BUY or maybe just not SELL/Danger?
+            # Let's be strict: Only BUY or PROFIT (if momentum is strong).
+            if analysis_cand['signal'] in ['BUY', 'PROFIT']:
+                print(f"    -> ✅ {cand} Passed! Signal: {analysis_cand['signal']}")
+                verified_picks.append({
+                    'ticker': cand,
+                    'analysis': analysis_cand
+                })
+            else:
+                print(f"    -> ❌ {cand} Rejected. Signal: {analysis_cand['signal']} ({analysis_cand['reason']})")
+        
+        if verified_picks:
+            rec_text = ai_analyst.generate_recommendation_report(verified_picks)
+            if rec_text:
+                notifier.send_recommendations(rec_text)
+        else:
+            print("  -> No AI candidates passed the strategy validation.")
+
     print("✅ Scan complete.")
 
 if __name__ == "__main__":
