@@ -18,6 +18,11 @@ class DiscordNotifier:
 
         # Send individual alerts for actionable signals
         for ticker, res in results.items():
+            if res.get('type') == 'ALERT':
+                 self.send_alert(res)
+                 active_signals += 1
+                 continue
+
             if res['signal'] == "HOLD":
                 continue 
             
@@ -26,6 +31,40 @@ class DiscordNotifier:
 
         if active_signals == 0:
             print("No active signals today.")
+
+    def send_alert(self, alert_data):
+        """
+        Send a generic alert (e.g. from Watchdog).
+        alert_data: {ticker, color, msg, price, change, ...}
+        """
+        if not self.webhook_url: return
+        
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        embed = {
+            "title": f"⚠️ {alert_data['ticker']} Anomaly Detected",
+            "description": alert_data['msg'],
+            "color": alert_data.get('color', 0xffa500),
+            "fields": [
+                {"name": "Price", "value": f"${alert_data.get('price', 0):.2f}", "inline": True},
+                {"name": "Change", "value": f"{alert_data.get('change', 0):.2f}%", "inline": True},
+            ],
+            "footer": {"text": f"Stock Sentinel Watchdog • {timestamp}"}
+        }
+        
+        payload = {
+            "username": "Sentinel Watchdog 🐕",
+            "embeds": [embed]
+        }
+        
+        if self.user_id:
+            payload["content"] = f"<@{self.user_id}>"
+
+        try:
+            requests.post(self.webhook_url, json=payload)
+            print(f"  -> Watchdog alert sent for {alert_data['ticker']}.")
+        except Exception as e:
+            print(f"Failed to send alert for {alert_data['ticker']}: {e}")
     
     def _send_single_alert(self, ticker, res):
         icon_map = {

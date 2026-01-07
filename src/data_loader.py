@@ -31,18 +31,20 @@ class AlpacaLoader:
         except Exception as e:
             print(f"❌ Failed to connect to Alpaca Account: {e}")
 
-    def get_weekly_bars(self, ticker, limit=100):
-        """Get weekly bars, and convert to DataFrame"""
+    def get_daily_bars(self, ticker, limit=None, days=None):
+        """Get daily bars as DataFrame"""
         try:
             # Add delay to avoid rate limits
             time.sleep(0.3) 
             
-            # Explicitly use IEX feed for free paper data
-            # Fetch Daily data and resample to Weekly manually
             from datetime import datetime, timedelta
-            # Need enough daily data to form ~100 weekly bars
-            start_date = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')
             
+            if days:
+                start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+            else:
+                # Default to 2 years if not specified (for weekly resampling)
+                start_date = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')
+
             daily_bars = self.api.get_bars(
                 ticker, 
                 tradeapi.TimeFrame.Day, 
@@ -54,11 +56,26 @@ class AlpacaLoader:
                 print(f"⚠️ Warning: No data found for {ticker}")
                 return None
             
-            # Resample to Weekly (Ending on Friday)
             # Ensure index is datetime
             if not isinstance(daily_bars.index, pd.DatetimeIndex):
                 daily_bars.index = pd.to_datetime(daily_bars.index)
+                
+            return daily_bars
+            
+        except Exception as e:
+            print(f"❌ Error fetching {ticker}: {e}")
+            return None
 
+    def get_weekly_bars(self, ticker, limit=100):
+        """Get weekly bars, and convert to DataFrame"""
+        try:
+            # Fetch Daily data (default 2 years)
+            daily_bars = self.get_daily_bars(ticker)
+            
+            if daily_bars is None or daily_bars.empty:
+                return None
+            
+            # Resample to Weekly (Ending on Friday)
             weekly_bars = daily_bars.resample('W-FRI').agg({
                 'open': 'first',
                 'high': 'max',

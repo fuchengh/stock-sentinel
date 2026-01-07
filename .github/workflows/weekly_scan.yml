@@ -1,10 +1,23 @@
-name: Weekly Investment Scan
+name: Investment Sentinel
 
 on:
   schedule:
-    # Execute every Friday at 20:30
+    # 1. Weekly Strategy: Every Friday at 20:30 UTC
     - cron: '30 20 * * 5'
-  workflow_dispatch: # Allow manual triggering
+    
+    # 2. Daily Watchdog: Monday to Thursday at 20:30 UTC
+    - cron: '30 20 * * 1-4'
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Scan Mode'
+        required: true
+        default: 'WEEKLY'
+        type: choice
+        options:
+        - WEEKLY
+        - DAILY
 
 jobs:
   sentinel-run:
@@ -20,6 +33,24 @@ jobs:
 
       - name: Install Dependencies
         run: pip install -r requirements.txt
+        
+      - name: Determine Mode
+        id: mode
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "MODE=${{ inputs.mode }}" >> $GITHUB_ENV
+          elif [ "${{ github.event_name }}" == "schedule" ]; then
+            DAY_OF_WEEK=$(date +%u)
+            if [ "$DAY_OF_WEEK" -eq 5 ]; then
+              echo "MODE=WEEKLY" >> $GITHUB_ENV
+            else
+              echo "MODE=DAILY" >> $GITHUB_ENV
+            fi
+          else
+            # Default fallback
+            echo "MODE=WEEKLY" >> $GITHUB_ENV
+          fi
 
       - name: Execute Scan
         env:
@@ -31,4 +62,4 @@ jobs:
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
           AI_LANGUAGE: ${{ vars.AI_LANGUAGE }}
           WATCHLIST: ${{ secrets.WATCHLIST }}
-        run: python -m src.main
+        run: python -m src.main --mode $MODE
