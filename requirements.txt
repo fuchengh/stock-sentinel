@@ -1,6 +1,6 @@
 alpaca-trade-api
 pandas
-pandas_ta
+pandas-ta
 requests
 python-dotenv
 mplfinance
