@@ -91,3 +91,40 @@ class AlpacaLoader:
         except Exception as e:
             print(f"❌ Error fetching {ticker}: {e}")
             return None
+
+    def get_clock(self):
+        """Get market clock"""
+        try:
+            return self.api.get_clock()
+        except Exception as e:
+            print(f"❌ Error fetching clock: {e}")
+            return None
+
+    def get_calendar(self, start=None, end=None):
+        """Get market calendar"""
+        try:
+            return self.api.get_calendar(start=start, end=end)
+        except Exception as e:
+            print(f"❌ Error fetching calendar: {e}")
+            return None
+
+    def get_latest_news(self, ticker, limit=3):
+        """
+        Get the latest news headlines for a ticker.
+        """
+        try:
+            # Alpaca News API
+            news_list = self.api.get_news(symbol=ticker, limit=limit)
+            
+            if not news_list:
+                return None
+                
+            formatted_news = []
+            for n in news_list:
+                # Format: [Headline](URL) - Source
+                formatted_news.append(f"• [{n.headline}]({n.url}) - {n.source}")
+                
+            return "\n".join(formatted_news)
+        except Exception as e:
+            print(f"⚠️ News fetch failed for {ticker}: {str(e)}")
+            return None

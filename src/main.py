@@ -1,5 +1,7 @@
 import os
+import sys
 import argparse
+from datetime import datetime
 from dotenv import load_dotenv, dotenv_values
 from src.data_loader import AlpacaLoader
 from src.strategies import EngineerStrategy
@@ -33,11 +35,27 @@ def main():
     # 1. Initialize components
     loader = AlpacaLoader()
     notifier = DiscordNotifier()
+    ai_analyst = AIAnalyst() # Moved to global scope
+    
+    # Check Market Schedule
+    try:
+        clock = loader.get_clock()
+        if clock:
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            # Check calendar to see if today is a trading day
+            calendar = loader.get_calendar(start=today_str, end=today_str)
+            
+            if not calendar:
+                print("📅 Today is a market holiday. System sleeping.")
+                sys.exit(0)
+                
+            print(f"✅ Market is open (or valid trading day). Status: {'Open' if clock.is_open else 'Closed (After/Pre-market)'}")
+    except Exception as e:
+        print(f"⚠️ Market check warning: {e}")
     
     # Components specific to Weekly mode
     engineer_strategy = EngineerStrategy()
     chart_gen = ChartGenerator()
-    ai_analyst = AIAnalyst()
     
     # Component specific to Daily mode
     watchdog = WatchdogStrategy()
@@ -92,6 +110,23 @@ def main():
             
             if alert:
                 print(f"  -> 🚨 ALERT: {alert['msg']}")
+                
+                # 1. Fetch News
+                print(f"    -> Fetching news for {ticker}...")
+                news_text = loader.get_latest_news(ticker)
+                
+                # 2. AI Analysis
+                print(f"    -> Analyzing alert with AI...")
+                ai_insight = ai_analyst.analyze_alert(ticker, alert, news_text)
+                
+                # 3. Append to Alert Msg
+                if news_text:
+                    alert['msg'] += f"\n\n📰 **News Context:**\n{news_text}"
+                
+                if ai_insight:
+                    alert['msg'] += f"\n\n{ai_insight}"
+                    alert['ai_model'] = ai_analyst.model
+                    
                 results[ticker] = alert
             else:
                 print(f"  -> Normal.")
@@ -131,6 +166,11 @@ def main():
                 })
             else:
                 print(f"    -> ❌ {cand} Rejected. Signal: {analysis_cand['signal']} ({analysis_cand['reason']})")
+            
+            # Limit to top 3 verified picks
+            if len(verified_picks) >= 3:
+                print("  -> Found 3 verified picks. Stopping search.")
+                break
         
         if verified_picks:
             rec_text = ai_analyst.generate_recommendation_report(verified_picks)

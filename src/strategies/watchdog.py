@@ -21,12 +21,15 @@ class WatchdogStrategy:
         avg_vol = df['volume'].iloc[-6:-1].mean()
         vol_ratio = curr['volume'] / avg_vol if avg_vol > 0 else 0
         
-        # 3. Simple RSI Calculation (Alternative to pandas_ta)
+        # 3. RSI Calculation (Wilder's Smoothing)
         delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0))
         loss = (-delta.where(delta < 0, 0))
-        avg_gain = gain.rolling(window=14).mean()
-        avg_loss = loss.rolling(window=14).mean()
+        
+        # Use EWM with alpha=1/14 for standard Wilder's RSI
+        avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
+        
         rs = avg_gain / avg_loss
         daily_rsi = 100 - (100 / (1 + rs.iloc[-1])) if not np.isnan(rs.iloc[-1]) else 50
 

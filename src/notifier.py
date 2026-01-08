@@ -1,11 +1,18 @@
 import requests
 import os
+import pytz
 from datetime import datetime
 
 class DiscordNotifier:
     def __init__(self):
         self.webhook_url = os.getenv('DISCORD_WEBHOOK')
         self.user_id = os.getenv('DISCORD_USER_ID')
+        self.avatar_url = os.getenv('DISCORD_AVATAR_URL', 'https://i.imgur.com/dJouyw2.jpeg')
+        self.timezone = pytz.timezone('America/Los_Angeles')
+
+    def get_now_pt(self, format='%Y-%m-%d %H:%M:%S'):
+        """Helper to get current time in Pacific Time"""
+        return datetime.now(pytz.utc).astimezone(self.timezone).strftime(format)
 
     def send_report(self, results):
         """
@@ -32,6 +39,7 @@ class DiscordNotifier:
         if active_signals == 0:
             print("No active signals today.")
 
+
     def send_alert(self, alert_data):
         """
         Send a generic alert (e.g. from Watchdog).
@@ -39,7 +47,7 @@ class DiscordNotifier:
         """
         if not self.webhook_url: return
         
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        timestamp = self.get_now_pt()
         
         embed = {
             "title": f"⚠️ {alert_data['ticker']} Anomaly Detected",
@@ -49,11 +57,12 @@ class DiscordNotifier:
                 {"name": "Price", "value": f"${alert_data.get('price', 0):.2f}", "inline": True},
                 {"name": "Change", "value": f"{alert_data.get('change', 0):.2f}%", "inline": True},
             ],
-            "footer": {"text": f"Stock Sentinel Watchdog • {timestamp}"}
+            "footer": {"text": f"Stock Sentinel Watchdog • {timestamp} PT"}
         }
         
         payload = {
             "username": "Sentinel Watchdog 🐕",
+            "avatar_url": self.avatar_url,
             "embeds": [embed]
         }
         
@@ -73,8 +82,8 @@ class DiscordNotifier:
         icon = icon_map.get(res['severity'], "⚪")
         
         # Current time for footer
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        footer_text = f"Stock Sentinel • {timestamp}"
+        timestamp = self.get_now_pt()
+        footer_text = f"Stock Sentinel • {timestamp} PT"
         
         if res.get('ai_model'):
             # Clean up model name (e.g. "openai/gpt-4o" -> "gpt-4o") for cleaner display
@@ -112,7 +121,7 @@ class DiscordNotifier:
         
         payload = {
             "username": "Stock Sentinel 🤖",
-            "avatar_url": "https://i.imgur.com/dJouyw2.jpeg",
+            "avatar_url": self.avatar_url,
             "embeds": [embed]
         }
         
@@ -147,11 +156,12 @@ class DiscordNotifier:
             "title": "🧠 AI Weekly Market Picks",
             "description": recommendation_text,
             "color": 0x9b59b6, # Purple
-            "footer": {"text": f"Stock Sentinel AI • {datetime.now().strftime('%Y-%m-%d')}"}
+            "footer": {"text": f"Stock Sentinel AI • {self.get_now_pt('%Y-%m-%d')} PT"}
         }
         
         payload = {
             "username": "Sentinel Strategist 🔮",
+            "avatar_url": self.avatar_url,
             "embeds": [embed]
         }
         

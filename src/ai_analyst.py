@@ -111,7 +111,7 @@ class AIAnalyst:
         3. Return ONLY a JSON list of ticker symbols. Do not output any other text.
         
         Example Output:
-        ["NVDA", "AMD", "TSLA", "PLTR", "MSFT"]
+        ["NVDA", "AMD", "TSM", "PLTR", "MSFT"]
         """
 
         headers = {
@@ -245,3 +245,69 @@ class AIAnalyst:
         except Exception as e:
             print(f"⚠️ AI Report Gen Exception: {e}")
             return None
+
+    def analyze_alert(self, ticker, alert_data, news_context=None):
+        """
+        Analyzes a sudden alert (e.g. Flash Crash) with news context.
+        """
+        if not self.api_key:
+            return None
+
+        prompt = f"""
+        You are a financial news analyst.
+        
+        Event: {ticker} has triggered an alert.
+        Alert Details:
+        {alert_data['msg']}
+        Price: ${alert_data.get('price', 0):.2f} (Change: {alert_data.get('change', 0):.2f}%)
+        
+        Recent News Headlines:
+        {news_context if news_context else "No recent news found via API."}
+        
+        Task:
+        1. Read the alert and the news (if any).
+        2. If news exists, explain if the news explains the price movement.
+        3. If no news, speculate on technical reasons or market sentiment.
+        4. Provide a very short (1-2 sentences) "Reasoning" for the user.
+
+        Output Format:
+        **AI Insight:** [Your explanation]
+        """
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "HTTP-Referer": self.site_url,
+            "X-Title": self.app_name,
+            "Content-Type": "application/json"
+        }
+
+        data = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": "You are a concise financial news analyst."},
+                {"role": "user", "content": prompt}
+            ],
+            "plugins": [{"id": "web"}], # Keep web access just in case
+            "temperature": 0.5,
+            "max_tokens": 200
+        }
+
+        try:
+            print(f"  -> Asking AI to explain alert for {ticker}...")
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=headers,
+                data=json.dumps(data),
+                timeout=20
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                content = result['choices'][0]['message']['content']
+                return content.strip()
+            return None
+                
+        except Exception as e:
+            print(f"⚠️ AI Alert Analysis Exception: {e}")
+            return None
+
