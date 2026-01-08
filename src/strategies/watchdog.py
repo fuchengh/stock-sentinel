@@ -12,9 +12,10 @@ class WatchdogStrategy:
             return None
             
         curr = df.iloc[-1]
+        prev = df.iloc[-2]
         
-        # 1. Percent Change
-        pct_change = (curr['close'] - curr['open']) / curr['open'] * 100
+        # 1. Percent Change (Compared to Yesterday's Close)
+        pct_change = (curr['close'] - prev['close']) / prev['close'] * 100
         
         # 2. Relative Volume (RVOL)
         # Avg volume of past 5 days (excluding today)

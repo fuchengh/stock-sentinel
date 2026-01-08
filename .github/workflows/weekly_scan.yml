@@ -2,11 +2,11 @@ name: Investment Sentinel
 
 on:
   schedule:
-    # 1. Weekly Strategy: Every Friday at 20:30 UTC
-    - cron: '30 20 * * 5'
+    # 1. Weekly Strategy: Every Friday at 21:30 UTC (13:30 PT)
+    - cron: '30 21 * * 5'
     
-    # 2. Daily Watchdog: Monday to Thursday at 20:30 UTC
-    - cron: '30 20 * * 1-4'
+    # 2. Daily Watchdog: Monday to Thursday at 21:30 UTC (13:30 PT)
+    - cron: '30 21 * * 1-4'
 
   workflow_dispatch:
     inputs:
