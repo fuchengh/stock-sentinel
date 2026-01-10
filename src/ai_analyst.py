@@ -11,9 +11,11 @@ class AIAnalyst:
         self.site_url = "https://github.com/yourusername/stock-sentinel"
         self.app_name = "Stock Sentinel"
 
-    def get_analysis(self, ticker, analysis_data):
+    def get_analysis(self, ticker, analysis_data, backtest_config=None):
         """
         Sends technical data to LLM for a second opinion.
+        
+        backtest_config: Optional dict with {'date': 'YYYY-MM-DD', 'news': [list of strings]}
         """
         if not self.api_key:
             return "AI Analysis skipped (No API Key provided)."
@@ -26,12 +28,44 @@ class AIAnalyst:
         if self.language in ['zh', 'zh_tw', 'chinese']:
             lang_instruction = "Respond in Traditional Chinese (繁體中文). Keep professional financial terminology in English where appropriate (e.g., EMA, RSI)."
 
+        # Determine context (Live vs Backtest)
+        if backtest_config:
+            sim_date = backtest_config.get('date')
+            hist_news = backtest_config.get('news', [])
+            news_section = "\n".join(hist_news) if hist_news else "No specific news found for this period."
+            
+            context_instruction = f"""
+            *** SIMULATION MODE - STRICT KNOWLEDGE CUTOFF ***
+            CURRENT DATE: {sim_date}
+            
+            You are a Wall Street trader working on {sim_date}.
+            You MUST act as if you are living in that moment.
+            
+            RULES:
+            1. You have ZERO knowledge of the future. Do not mention anything that happens after {sim_date}.
+            2. Analyze the situation based ONLY on the Technical Indicators provided and the HISTORICAL NEWS below.
+            3. If the market sentiment is bearish ON THIS DATE, reflect that fear. Do not use your future knowledge of a recovery to be optimistic.
+            
+            HISTORICAL NEWS (Context available on {sim_date}):
+            {news_section}
+            """
+            web_plugin = [] # No web search in backtest
+            sys_role = f"You are a disciplined financial analyst working on {sim_date}. You strictly ignore all future events."
+            
+        else:
+            # Live Mode
+            context_instruction = """
+            Use your WEB SEARCH capability to check for any recent news, earnings reports, or macro events 
+            that might affect this stock specifically.
+            """
+            web_plugin = [{"id": "web"}]
+            sys_role = "You are a concise financial analyst with web search capabilities."
+
         prompt = f"""
         You are a senior algorithmic trader and technical analyst. 
         Analyze the following trade signal for {ticker} on a Weekly Timeframe.
         
-        Use your WEB SEARCH capability to check for any recent news, earnings reports, or macro events 
-        that might affect this stock specifically.
+        {context_instruction}
 
         Target: {ticker}
         Current Price: ${price:.2f}
@@ -45,13 +79,15 @@ class AIAnalyst:
 
         Task:
         1. Evaluate the signal quality based on technicals.
-        2. Incorporate recent NEWS or FUNDAMENTALS found via web search.
-        3. Check for risks (e.g., upcoming earnings, lawsuits, or industry trends).
+        2. Incorporate the provided NEWS or web search results (if in live mode).
+        3. Assess the Risk/Reward purely based on information available ON THAT DATE.
         4. Provide a 'Confidence Score' (Low/Medium/High) and concise advice.
+        5. Suggest a Position Sizing approach (Aggressive, Standard, or Conservative).
 
         Format output as:
         **Verdict:** [✅ Agree / ❌ Disagree / ⚠️ Caution]
-        **Analysis:** [Your concise analysis combining technicals + web search results]
+        **Sizing:** [Aggressive / Standard / Conservative]
+        **Analysis:** [Your concise analysis]
         
         IMPORTANT: {lang_instruction}
         """
@@ -66,13 +102,15 @@ class AIAnalyst:
         data = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": "You are a concise financial analyst with web search capabilities."},
+                {"role": "system", "content": sys_role},
                 {"role": "user", "content": prompt}
             ],
-            "plugins": [{"id": "web"}], # Enable Web Search Plugin
             "temperature": 0.7,
             "max_tokens": 300
         }
+        
+        if web_plugin:
+            data["plugins"] = web_plugin
 
         try:
             response = requests.post(
@@ -87,7 +125,7 @@ class AIAnalyst:
                 content = result['choices'][0]['message']['content']
                 return content.strip()
             else:
-                print(f"⚠️ OpenRouter Error {response.status_code}: {response.text}")
+                print(f"⚠️ OpenRouter Error {response.status_code}")
                 return "AI Analysis failed (API Error)."
                 
         except Exception as e:
@@ -152,7 +190,7 @@ class AIAnalyst:
                     return json.loads(json_str)
                 return []
             else:
-                print(f"⚠️ OpenRouter Error {response.status_code}: {response.text}")
+                print(f"⚠️ OpenRouter Error {response.status_code}")
                 return []
                 
         except Exception as e:

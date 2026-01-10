@@ -128,3 +128,31 @@ class AlpacaLoader:
         except Exception as e:
             print(f"⚠️ News fetch failed for {ticker}: {str(e)}")
             return None
+
+    def get_news_for_period(self, ticker, start_date, end_date, limit=5):
+        """
+        Get historical news for a specific date range.
+        Dates should be in 'YYYY-MM-DD' format.
+        """
+        try:
+            news_list = self.api.get_news(
+                symbol=ticker, 
+                start=start_date, 
+                end=end_date, 
+                limit=limit,
+                include_content=False # We only need headlines and summary for now to save tokens
+            )
+            
+            if not news_list:
+                return []
+                
+            formatted_news = []
+            for n in news_list:
+                # Add date to the headline for context
+                date_str = n.created_at.strftime('%Y-%m-%d')
+                formatted_news.append(f"• [{date_str}] {n.headline} - {n.source}")
+                
+            return formatted_news
+        except Exception as e:
+            print(f"⚠️ Historical news fetch failed for {ticker}: {str(e)}")
+            return []
