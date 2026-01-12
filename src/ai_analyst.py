@@ -26,7 +26,7 @@ class AIAnalyst:
         # Language instruction
         lang_instruction = "Respond in English."
         if self.language in ['zh', 'zh_tw', 'chinese']:
-            lang_instruction = "Respond in Traditional Chinese (繁體中文). Keep professional financial terminology in English where appropriate (e.g., EMA, RSI)."
+            lang_instruction = "Respond in Traditional Chinese (繁體中文) for the **Analysis** section. **CRITICAL:** Keep the headers (**Verdict**, **Confidence**, **Sizing**) and financial terms (e.g., EMA, RSI, Risk/Reward) in English."
 
         # Determine context (Live vs Backtest)
         if backtest_config:
@@ -62,8 +62,7 @@ class AIAnalyst:
             sys_role = "You are a concise financial analyst with web search capabilities."
 
         prompt = f"""
-        You are a senior algorithmic trader and technical analyst. 
-        Analyze the following trade signal for {ticker} on a Weekly Timeframe.
+        You are a senior algorithmic trader. Analyze the trade signal and return a JSON object.
         
         {context_instruction}
 
@@ -77,24 +76,23 @@ class AIAnalyst:
         - RSI 14: {analysis_data['rsi']:.1f}
         - ATR Stop Loss: ${analysis_data['stop_loss']:.2f}
         
-        **Smart Money / Event Context (Historical Earnings Reaction):**
+        **Smart Money / Event Context:**
         - Avg Reaction: {analysis_data.get('event_stats', {}).get('avg_reaction', 0):.2f}%
-        - Win Rate (Up-moves): {analysis_data.get('event_stats', {}).get('win_rate', 0):.0f}%
+        - Win Rate: {analysis_data.get('event_stats', {}).get('win_rate', 0):.0f}%
         - Insight: {analysis_data.get('event_stats', {}).get('message', 'N/A')}
 
         Task:
-        1. Evaluate the signal quality based on technicals.
-        2. Incorporate the provided NEWS or web search results (if in live mode).
-        3. Assess the Risk/Reward purely based on information available ON THAT DATE.
-        4. Provide a 'Confidence Score' (Low/Medium/High) and concise advice.
-        5. Suggest a Position Sizing approach (Aggressive, Standard, or Conservative).
+        1. Evaluate technicals, news, and risk/reward.
+        2. Suggest Confidence and Sizing.
+        3. Provide analysis in {lang_instruction.split(' ')[2] if 'Traditional' in lang_instruction else 'English'}.
 
-        Format output as:
-        **Verdict:** [✅ Agree / ❌ Disagree / ⚠️ Caution]
-        **Sizing:** [Aggressive / Standard / Conservative]
-        **Analysis:** [Your concise analysis]
-        
-        IMPORTANT: {lang_instruction}
+        Return ONLY a JSON object with this structure:
+        {{
+            "verdict": "Agree / Disagree / Caution",
+            "confidence": "Low / Medium / High",
+            "sizing": "Aggressive / Standard / Conservative",
+            "analysis": "Your analysis text here"
+        }}
         """
 
         headers = {
@@ -107,11 +105,12 @@ class AIAnalyst:
         data = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": sys_role},
+                {"role": "system", "content": "You are a specialized financial analyst that only outputs JSON."},
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.7,
-            "max_tokens": 300
+            "response_format": { "type": "json_object" }, # Force JSON mode
+            "temperature": 0.5,
+            "max_tokens": 500
         }
         
         if web_plugin:
@@ -122,13 +121,31 @@ class AIAnalyst:
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers=headers,
                 data=json.dumps(data),
-                timeout=10
+                timeout=20
             )
             
             if response.status_code == 200:
                 result = response.json()
-                content = result['choices'][0]['message']['content']
-                return content.strip()
+                raw_content = result['choices'][0]['message']['content']
+                
+                # Parse JSON and Reconstruct Markdown manually to lock the format
+                try:
+                    parsed = json.loads(raw_content)
+                    v = parsed.get('verdict', 'N/A')
+                    # Add Emoji to Verdict
+                    if 'Agree' in v: v = "✅ " + v
+                    elif 'Disagree' in v: v = "❌ " + v
+                    elif 'Caution' in v: v = "⚠️ " + v
+                    
+                    formatted = (
+                        f"**Verdict:** {v}\n"
+                        f"**Confidence:** {parsed.get('confidence', 'N/A')}\n"
+                        f"**Sizing:** {parsed.get('sizing', 'N/A')}\n"
+                        f"**Analysis:** {parsed.get('analysis', 'N/A')}"
+                    )
+                    return formatted
+                except:
+                    return raw_content.strip() # Fallback to raw if JSON fails
             else:
                 print(f"⚠️ OpenRouter Error {response.status_code}")
                 return "AI Analysis failed (API Error)."
@@ -145,16 +162,13 @@ class AIAnalyst:
         if not self.api_key:
             return []
 
-        prompt = f"""
+        prompt = """
         You are a financial screener.
-        
-        Task:
-        1. Use WEB SEARCH to identify 5-8 US stocks that have strong positive momentum, upcoming catalysts, or favorable sector trends for the next week.
+        1. Use WEB SEARCH to identify 5-8 US stocks with strong momentum or upcoming catalysts.
         2. Focus on liquid, mid-to-large cap stocks.
-        3. Return ONLY a JSON list of ticker symbols. Do not output any other text.
+        3. Return a JSON object with a 'candidates' key containing a list of ticker symbols.
         
-        Example Output:
-        ["NVDA", "AMD", "TSM", "PLTR", "MSFT"]
+        Example: {"candidates": ["NVDA", "AMD", "TSM"]}
         """
 
         headers = {
@@ -170,9 +184,10 @@ class AIAnalyst:
                 {"role": "system", "content": "You are a JSON-only financial data provider."},
                 {"role": "user", "content": prompt}
             ],
+            "response_format": { "type": "json_object" },
             "plugins": [{"id": "web"}],
             "temperature": 0.5,
-            "max_tokens": 150
+            "max_tokens": 200
         }
 
         try:
@@ -187,69 +202,68 @@ class AIAnalyst:
             if response.status_code == 200:
                 result = response.json()
                 content = result['choices'][0]['message']['content']
-                # Clean up content to ensure it's just the list
-                start = content.find('[')
-                end = content.find(']') + 1
-                if start != -1 and end != -1:
-                    json_str = content[start:end]
-                    return json.loads(json_str)
-                return []
-            else:
-                print(f"⚠️ OpenRouter Error {response.status_code}")
-                return []
+                parsed = json.loads(content)
+                return parsed.get('candidates', [])
+            return []
                 
         except Exception as e:
             print(f"⚠️ AI Candidate Search Exception: {e}")
             return []
 
-    def generate_recommendation_report(self, verified_picks):
+    def generate_recommendation_report(self, verified_picks, macro_data=None):
         """
         verified_picks: List of dicts, each containing 'ticker' and 'analysis' (from strategy).
+        macro_data: Optional dict from MacroSentinel (regime, reason, etc).
         """
         if not self.api_key or not verified_picks:
             return None
         
         # Prepare data for AI
-        picks_summary = ""
+        picks_summary = []
         for item in verified_picks:
             t = item['ticker']
             a = item['analysis']
-            # Pass raw technical data to AI to ensure it uses it
-            picks_summary += f"""
-            - Ticker: {t}
-              Price: ${a['price']:.2f}
-              Signal: {a['signal']}
-              RSI: {a['rsi']:.1f}
-              EMA_20: ${a['ema']:.2f}
-              Strategy_Reason: {a['reason']}
+            picks_summary.append({
+                "ticker": t,
+                "price": f"{a['price']:.2f}",
+                "signal": a['signal'],
+                "rsi": f"{a['rsi']:.1f}",
+                "reason": a['reason']
+            })
+        
+        # Macro Context Construction
+        macro_context = "Market Context: Unknown (Assume Neutral)"
+        if macro_data:
+            macro_context = f"""
+            Regime: {macro_data.get('regime', 'NEUTRAL')}
+            Reason: {macro_data.get('reason', 'N/A')}
+            Yield: {macro_data.get('tnx_current', 0):.2f}%
+            DXY: {macro_data.get('dxy_current', 0):.2f}
             """
 
-        lang_instruction = "Respond in English."
-        if self.language in ['zh', 'zh_tw', 'chinese']:
-            lang_instruction = "Respond in Traditional Chinese (繁體中文). Maintain English for Tickers and Indicators (RSI, EMA)."
+        lang_name = "Traditional Chinese (繁體中文)" if self.language in ['zh', 'zh_tw', 'chinese'] else "English"
 
         prompt = f"""
-        You are a quantitative analyst reporting on validated strategy signals.
+        You are a quantitative analyst. Create a weekly recommendation report.
         
-        We have filtered a list of stocks using our 'Engineer Strategy'. 
-        Here are the stocks that PASSED the algorithm:
-        {picks_summary}
+        {macro_context}
+        
+        Validated Picks (Strategy Results):
+        {json.dumps(picks_summary, indent=2)}
         
         Task:
-        1. Write a brief "Market Opportunity" summary based on current web search context.
-        2. Present the "Validated Picks" list. 
-        3. **CRITICAL:** For each pick, you MUST display the Technical Data exactly as provided (Signal, RSI, Strategy Reason). Do not hallucinate different numbers.
-        4. Add a brief "Analyst Note" for each, combining the technical setup with any relevant news found via web search.
+        1. Write a 'market_summary' based on the Macro Regime.
+        2. For each pick in the list, write a concise 'analyst_note' combining technicals with recent news.
+        3. Use {lang_name} for the summary and notes.
 
-        Format Example (Strictly follow this structure):
-        **🚀 Validated Picks:**
-        
-        1. **[Ticker]** - $[Price]
-           - **Strategy:** [Signal] (RSI: [RSI])
-           - **Tech Setup:** [Strategy_Reason]
-           - **Analyst Note:** [Your insight on why this setup matters now]
-
-        IMPORTANT: {lang_instruction}
+        Return ONLY a JSON object:
+        {{
+            "market_summary": "...",
+            "picks": [
+                {{ "ticker": "...", "note": "..." }},
+                ...
+            ]
+        }}
         """
 
         headers = {
@@ -262,12 +276,13 @@ class AIAnalyst:
         data = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": "You are a disciplined financial reporter."},
+                {"role": "system", "content": "You are a financial reporter that only outputs JSON."},
                 {"role": "user", "content": prompt}
             ],
+            "response_format": { "type": "json_object" },
             "plugins": [{"id": "web"}],
-            "temperature": 0.5, # Lower temperature for precision
-            "max_tokens": 600
+            "temperature": 0.5,
+            "max_tokens": 1000
         }
 
         try:
@@ -276,13 +291,33 @@ class AIAnalyst:
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers=headers,
                 data=json.dumps(data),
-                timeout=30
+                timeout=45
             )
             
             if response.status_code == 200:
                 result = response.json()
                 content = result['choices'][0]['message']['content']
-                return content.strip()
+                parsed = json.loads(content)
+                
+                # Reconstruct Markdown in Python to lock headers
+                summary_title = "市場機會：" if "Chinese" in lang_name else "Market Opportunity:"
+                report = f"**{summary_title}**\n{parsed.get('market_summary', '')}\n\n**🚀 Validated Picks:**\n\n"
+                
+                # Create a map for quick lookup of the original technical data
+                tech_map = {p['ticker']: p for p in picks_summary}
+                
+                for p in parsed.get('picks', []):
+                    ticker = p['ticker']
+                    note = p['note']
+                    tech = tech_map.get(ticker)
+                    
+                    if tech:
+                        report += f"1. **[{ticker}]** - ${tech['price']}\n"
+                        report += f"   - **Strategy:** {tech['signal']} (RSI: {tech['rsi']})\n"
+                        report += f"   - **Tech Setup:** {tech['reason']}\n"
+                        report += f"   - **Analyst Note:** {note}\n\n"
+                
+                return report.strip()
             return None
                 
         except Exception as e:

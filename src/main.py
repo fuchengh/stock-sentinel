@@ -168,8 +168,11 @@ def main():
                 print(f"  -> Normal.")
 
     # 5. Send Notification
-    # Inject Macro Data into the results for the Notifier to see
-    results['MACRO'] = macro_data
+    # Inject Macro Data into the results for the Notifier to see (only in DAILY mode)
+    # In WEEKLY mode, Macro info is integrated into the AI Recommendation report.
+    if mode == 'DAILY':
+        results['MACRO'] = macro_data
+        
     notifier.send_report(results)
 
     # 6. Weekly AI Recommendations
@@ -211,7 +214,7 @@ def main():
                 break
         
         if verified_picks:
-            rec_text = ai_analyst.generate_recommendation_report(verified_picks)
+            rec_text = ai_analyst.generate_recommendation_report(verified_picks, macro_data)
             if rec_text:
                 notifier.send_recommendations(rec_text)
         else:
