@@ -77,6 +77,16 @@ class AIAnalyst:
             web_plugin = [{"id": "web"}]
             sys_role = "You are a concise financial analyst with web search capabilities."
 
+        # Determine context (Live vs Backtest)
+        if backtest_config:
+            # ... (omitted for brevity, keeping existing logic)
+            pass 
+            
+        # Define placeholder based on language
+        analysis_placeholder = "Your analysis text here..."
+        if self.language in ['zh', 'zh_tw', 'chinese']:
+            analysis_placeholder = "你的中文分析..."
+
         prompt = f"""
         You are a senior algorithmic trader. Analyze the trade signal and return a JSON object.
         
@@ -98,17 +108,17 @@ class AIAnalyst:
         - Insight: {analysis_data.get('event_stats', {}).get('message', 'N/A')}
 
         Task:
-        1. Evaluate technicals, news, and risk/reward.
-        2. Suggest Confidence and Sizing.
-        3. Provide analysis in {lang_instruction.split(' ')[2] if 'Traditional' in lang_instruction else 'English'}.
-        4. **IMPORTANT:** If you find relevant news, you MUST include citations in the analysis text using Markdown links, e.g., "News says growth is strong [Source](http://url)...". Do NOT rely on implicit citations.
+        1. **LANGUAGE:** {lang_instruction}
+        2. Evaluate technicals, news, and risk/reward.
+        3. Suggest Confidence and Sizing.
+        4. **CITATIONS:** When citing news, use numeric brackets like **[1]**, **[2]** at the end of sentences. Do NOT use website names like "Yahoo Finance" as links.
 
         Return ONLY a JSON object with this structure:
         {{
             "verdict": "Agree / Disagree / Caution",
             "confidence": "Low / Medium / High",
             "sizing": "Aggressive / Standard / Conservative",
-            "analysis": "Your analysis text here"
+            "analysis": "{analysis_placeholder}"
         }}
         """
 
