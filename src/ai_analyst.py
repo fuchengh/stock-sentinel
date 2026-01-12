@@ -76,6 +76,11 @@ class AIAnalyst:
         - EMA 20: ${analysis_data['ema']:.2f}
         - RSI 14: {analysis_data['rsi']:.1f}
         - ATR Stop Loss: ${analysis_data['stop_loss']:.2f}
+        
+        **Smart Money / Event Context (Historical Earnings Reaction):**
+        - Avg Reaction: {analysis_data.get('event_stats', {}).get('avg_reaction', 0):.2f}%
+        - Win Rate (Up-moves): {analysis_data.get('event_stats', {}).get('win_rate', 0):.0f}%
+        - Insight: {analysis_data.get('event_stats', {}).get('message', 'N/A')}
 
         Task:
         1. Evaluate the signal quality based on technicals.

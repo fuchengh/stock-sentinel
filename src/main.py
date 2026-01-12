@@ -6,6 +6,9 @@ from dotenv import load_dotenv, dotenv_values
 from src.data_loader import AlpacaLoader
 from src.strategies import EngineerStrategy
 from src.strategies.watchdog import WatchdogStrategy
+from src.strategies.macro import MacroSentinel
+from src.strategies.event_backtester import EventBacktester
+from src.strategies.position_sizer import PositionSizer
 from src.notifier import DiscordNotifier
 from src.chart_generator import ChartGenerator
 from src.ai_analyst import AIAnalyst
@@ -36,6 +39,23 @@ def main():
     loader = AlpacaLoader()
     notifier = DiscordNotifier()
     ai_analyst = AIAnalyst() # Moved to global scope
+    macro_sentinel = MacroSentinel()
+    event_backtester = EventBacktester()
+    engineer_strategy = EngineerStrategy()
+    
+    # Initialize Position Sizer with Account Size
+    # Default to 100,000 (Paper Trading Standard) if not set
+    acc_size = float(os.getenv('ACCOUNT_SIZE', '100000'))
+    sizer = PositionSizer(account_size=acc_size, base_risk_pct=0.01) # 1% Base Risk
+
+    chart_gen = ChartGenerator()
+    watchdog = WatchdogStrategy()
+
+    # 2. Macro Analysis (The "Strategic View")
+    print("🌍 Analyzing Macro Environment...")
+    macro_data = macro_sentinel.analyze()
+    print(f"  -> Regime: {macro_data['regime']}")
+    print(f"  -> Reason: {macro_data['reason']}")
     
     # Check Market Schedule
     try:
@@ -47,27 +67,23 @@ def main():
             
             if not calendar:
                 print("📅 Today is a market holiday. System sleeping.")
+                # Optional: Send Macro Report even on holidays?
+                # notifier.send_macro_report(macro_data) 
                 sys.exit(0)
                 
             print(f"✅ Market is open (or valid trading day). Status: {'Open' if clock.is_open else 'Closed (After/Pre-market)'}")
     except Exception as e:
         print(f"⚠️ Market check warning: {e}")
     
-    # Components specific to Weekly mode
-    engineer_strategy = EngineerStrategy()
-    chart_gen = ChartGenerator()
-    
-    # Component specific to Daily mode
-    watchdog = WatchdogStrategy()
 
-    # 2. Get watchlist from environment variable
+    # 3. Get watchlist from environment variable
     raw_watchlist = os.getenv('WATCHLIST', 'ALAB')
     watchlist = [x.strip() for x in raw_watchlist.split(',') if x.strip()]
 
     print(f"🔍 Scanning list: {watchlist}")
     results = {}
 
-    # 3. Process each ticker
+    # 4. Process each ticker
     for ticker in watchlist:
         print(f"Processing {ticker}...")
         
@@ -79,6 +95,26 @@ def main():
             # Step B: Analyze
             analysis = engineer_strategy.analyze(df)
             
+            # Step B.2: Event Backtest (Smart Money Context)
+            print(f"  -> Running Event Backtest for {ticker}...")
+            event_stats = event_backtester.analyze_earnings_behavior(ticker)
+            analysis['event_stats'] = event_stats
+            print(f"    -> {event_stats['message']}")
+
+            # Step B.3: Position Sizing (Risk Management)
+            # Only calculate if we are considering a position (BUY or even watching)
+            # We pass the Macro Regime we found earlier.
+            if analysis['signal'] == 'BUY':
+                sizing = sizer.calculate_size(
+                    price=analysis['price'], 
+                    stop_loss=analysis['stop_loss'], 
+                    macro_regime=macro_data['regime']
+                )
+                analysis['sizing'] = sizing
+                print(f"    -> ⚖️ Sizing: Buy {sizing['shares']} shares ({sizing['message']})")
+            else:
+                analysis['sizing'] = None
+
             # Step C: Generate Chart & AI Analysis if Interesting
             if analysis['signal'] != "HOLD":
                 print(f"  -> {analysis['signal']} detected! Generating chart & AI analysis...")
@@ -131,10 +167,12 @@ def main():
             else:
                 print(f"  -> Normal.")
 
-    # 4. Send Notification
+    # 5. Send Notification
+    # Inject Macro Data into the results for the Notifier to see
+    results['MACRO'] = macro_data
     notifier.send_report(results)
 
-    # 5. Weekly AI Recommendations
+    # 6. Weekly AI Recommendations
     if mode == 'WEEKLY':
         print("🔮 Generating weekly AI market recommendations...")
         candidates = ai_analyst.get_ticker_candidates()

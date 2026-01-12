@@ -25,6 +25,11 @@ class DiscordNotifier:
 
         # Send individual alerts for actionable signals
         for ticker, res in results.items():
+            # 1. Handle Macro Report
+            if ticker == 'MACRO':
+                self.send_macro_report(res)
+                continue
+
             if res.get('type') == 'ALERT':
                  self.send_alert(res)
                  active_signals += 1
@@ -39,6 +44,43 @@ class DiscordNotifier:
         if active_signals == 0:
             print("No active signals today.")
 
+
+    def send_macro_report(self, macro_data):
+        """
+        Sends the Macro Environment Report.
+        """
+        if not self.webhook_url: return
+
+        regime = macro_data['regime']
+        color_map = {
+            "RISK_ON": 0x2ecc71,  # Green
+            "NEUTRAL": 0xf1c40f,  # Yellow
+            "RISK_OFF": 0xe74c3c  # Red
+        }
+        color = color_map.get(regime, 0x95a5a6) # Grey default
+
+        embed = {
+            "title": f"🌍 Market Regime: {regime}",
+            "description": f"**Status:** {macro_data['reason']}",
+            "color": color,
+            "fields": [
+                {"name": "US 10Y Yield", "value": f"{macro_data['tnx_current']:.3f}%", "inline": True},
+                {"name": "Dollar Index (DXY)", "value": f"{macro_data['dxy_current']:.3f}", "inline": True},
+            ],
+            "footer": {"text": f"Macro Sentinel • {self.get_now_pt()}"}
+        }
+
+        payload = {
+            "username": "Macro Sentinel 🦅",
+            "avatar_url": self.avatar_url,
+            "embeds": [embed]
+        }
+
+        try:
+            requests.post(self.webhook_url, json=payload)
+            print(f"  -> Macro report sent.")
+        except Exception as e:
+            print(f"Failed to send macro report: {e}")
 
     def send_alert(self, alert_data):
         """
@@ -110,6 +152,16 @@ class DiscordNotifier:
             ],
             "footer": {"text": footer_text}
         }
+
+        # Add Sizing Field if available
+        if res.get('sizing'):
+            sz = res['sizing']
+            sizing_text = f"**{sz['shares']} Shares** (~${sz['position_value']:.0f})\nRisk: ${sz['risk_amount']:.0f} ({sz['risk_pct_of_account']:.2f}%)"
+            embed['fields'].append({
+                "name": "⚖️ Rec. Size",
+                "value": sizing_text,
+                "inline": False
+            })
 
         # If chart exists, attach it
         files = {}
