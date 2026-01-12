@@ -19,99 +19,32 @@ class AIAnalyst:
         Also attempts to preserve any markdown links if they exist.
         """
         if not text: return text
-        # Regex to capture the citation ID inside the messy XML
-        # Pattern looks for the argument tag with name="citation_id" and captures the number
-        pattern = r'<grok:render[^>]*>.*?<argument name="citation_id">(\d+)</argument>.*?</grok:render>'
         
-        # Replace found tags with simple bracket [ID]
-        cleaned_text = re.sub(pattern, r'[\1]', text, flags=re.DOTALL)
-        return cleaned_text
+        # 1. Aggressive XML Cleaner
+        # Matches <grok:render ...> ... </grok:render>
+        # We try to extract the number if it exists, otherwise just remove it.
+        
+        # Pattern A: Try to find citation_id
+        pattern_id = r'<grok:render[^>]*>.*?<argument name="citation_id">\s*(\d+)\s*</argument>.*?</grok:render>'
+        text = re.sub(pattern_id, r' [\1] ', text, flags=re.DOTALL)
+        
+        # Pattern B: Cleanup any remaining grok tags that didn't match Pattern A
+        # (e.g. render_media, or different structure)
+        pattern_residual = r'<grok:[^>]+>.*?</grok:[^>]+>'
+        text = re.sub(pattern_residual, '', text, flags=re.DOTALL)
+        
+        # Cleanup double spaces created by replacement
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        return text
 
     def get_analysis(self, ticker, analysis_data, backtest_config=None):
-        """
-        Sends technical data to LLM for a second opinion.
-        
-        backtest_config: Optional dict with {'date': 'YYYY-MM-DD', 'news': [list of strings]}
-        """
-        if not self.api_key:
-            return "AI Analysis skipped (No API Key provided)."
-
-        signal = analysis_data['signal']
-        price = analysis_data['price']
-        
-        # Language instruction
-        lang_instruction = "Respond in English."
-        if self.language in ['zh', 'zh_tw', 'chinese']:
-            lang_instruction = "Respond in Traditional Chinese (繁體中文) for the **Analysis** section. **CRITICAL:** Keep the headers (**Verdict**, **Confidence**, **Sizing**) and financial terms (e.g., EMA, RSI, Risk/Reward) in English."
-
-        # Determine context (Live vs Backtest)
-        if backtest_config:
-            sim_date = backtest_config.get('date')
-            hist_news = backtest_config.get('news', [])
-            news_section = "\n".join(hist_news) if hist_news else "No specific news found for this period."
-            
-            context_instruction = f"""
-            *** SIMULATION MODE - STRICT KNOWLEDGE CUTOFF ***
-            CURRENT DATE: {sim_date}
-            
-            You are a Wall Street trader working on {sim_date}.
-            You MUST act as if you are living in that moment.
-            
-            RULES:
-            1. You have ZERO knowledge of the future. Do not mention anything that happens after {sim_date}.
-            2. Analyze the situation based ONLY on the Technical Indicators provided and the HISTORICAL NEWS below.
-            3. If the market sentiment is bearish ON THIS DATE, reflect that fear. Do not use your future knowledge of a recovery to be optimistic.
-            
-            HISTORICAL NEWS (Context available on {sim_date}):
-            {news_section}
-            """
-            web_plugin = [] # No web search in backtest
-            sys_role = f"You are a disciplined financial analyst working on {sim_date}. You strictly ignore all future events."
-            
-        else:
-            # Live Mode
-            context_instruction = """
-            Use your WEB SEARCH capability to check for any recent news, earnings reports, or macro events 
-            that might affect this stock specifically.
-            """
-            web_plugin = [{"id": "web"}]
-            sys_role = "You are a concise financial analyst with web search capabilities."
-
-        # Determine context (Live vs Backtest)
-        if backtest_config:
-            # ... (omitted for brevity, keeping existing logic)
-            pass 
-            
-        # Define placeholder based on language
-        analysis_placeholder = "Your analysis text here..."
-        if self.language in ['zh', 'zh_tw', 'chinese']:
-            analysis_placeholder = "你的中文分析..."
-
-        prompt = f"""
-        You are a senior algorithmic trader. Analyze the trade signal and return a JSON object.
-        
-        {context_instruction}
-
-        Target: {ticker}
-        Current Price: ${price:.2f}
-        Signal: {signal}
-        Reason: {analysis_data['reason']}
-        
-        Technical Indicators:
-        - EMA 20: ${analysis_data['ema']:.2f}
-        - RSI 14: {analysis_data['rsi']:.1f}
-        - ATR Stop Loss: ${analysis_data['stop_loss']:.2f}
-        
-        **Smart Money / Event Context:**
-        - Avg Reaction: {analysis_data.get('event_stats', {}).get('avg_reaction', 0):.2f}%
-        - Win Rate: {analysis_data.get('event_stats', {}).get('win_rate', 0):.0f}%
-        - Insight: {analysis_data.get('event_stats', {}).get('message', 'N/A')}
-
+# ... (inside get_analysis prompt)
         Task:
         1. **LANGUAGE:** {lang_instruction}
         2. Evaluate technicals, news, and risk/reward.
         3. Suggest Confidence and Sizing.
-        4. **CITATIONS:** When citing news, use numeric brackets like **[1]**, **[2]** at the end of sentences. Do NOT use website names like "Yahoo Finance" as links.
+        4. **CITATIONS:** You MUST provide the source URL for your claims. Use standard Markdown format: **[Source Name](URL)**. Example: "Revenue is up [Bloomberg](https://...)." Do NOT use bare brackets [1] unless you cannot find a URL.
 
         Return ONLY a JSON object with this structure:
         {{
