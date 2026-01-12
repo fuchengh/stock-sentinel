@@ -1,6 +1,8 @@
 import os
 import sys
 import argparse
+import tempfile
+import yfinance as yf
 from datetime import datetime
 from dotenv import load_dotenv, dotenv_values
 from src.data_loader import AlpacaLoader
@@ -31,6 +33,15 @@ def main():
     
     mode = args.mode
     print(f"🚀 Starting Sentinel in {mode} mode.")
+
+    # Fix for yfinance 'database is locked' in GitHub Actions
+    # Set a unique cache directory for this run
+    cache_dir = os.path.join(tempfile.gettempdir(), f"yf_cache_{os.getpid()}")
+    try:
+        yf.set_tz_cache_location(cache_dir)
+        print(f"DEBUG: yfinance cache set to {cache_dir}")
+    except Exception as e:
+        print(f"DEBUG: Could not set yfinance cache: {e}")
 
     # Debug: Check env vars
     print(f"DEBUG: ALPACA_KEY status: {'FOUND' if os.getenv('ALPACA_KEY') else 'MISSING'}")

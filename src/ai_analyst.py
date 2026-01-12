@@ -1,6 +1,7 @@
 import requests
 import os
 import json
+import re
 
 class AIAnalyst:
     def __init__(self):
@@ -10,6 +11,21 @@ class AIAnalyst:
         self.language = os.getenv('AI_LANGUAGE', 'en').lower() # en or zh_tw
         self.site_url = "https://github.com/yourusername/stock-sentinel"
         self.app_name = "Stock Sentinel"
+
+    def _clean_text(self, text):
+        """
+        Cleans up raw XML tags from Grok/OpenRouter output.
+        Converts <grok:render...><argument...>10</argument>...</grok:render> to [10].
+        Also attempts to preserve any markdown links if they exist.
+        """
+        if not text: return text
+        # Regex to capture the citation ID inside the messy XML
+        # Pattern looks for the argument tag with name="citation_id" and captures the number
+        pattern = r'<grok:render[^>]*>.*?<argument name="citation_id">(\d+)</argument>.*?</grok:render>'
+        
+        # Replace found tags with simple bracket [ID]
+        cleaned_text = re.sub(pattern, r'[\1]', text, flags=re.DOTALL)
+        return cleaned_text
 
     def get_analysis(self, ticker, analysis_data, backtest_config=None):
         """
@@ -85,6 +101,7 @@ class AIAnalyst:
         1. Evaluate technicals, news, and risk/reward.
         2. Suggest Confidence and Sizing.
         3. Provide analysis in {lang_instruction.split(' ')[2] if 'Traditional' in lang_instruction else 'English'}.
+        4. **IMPORTANT:** If you find relevant news, you MUST include citations in the analysis text using Markdown links, e.g., "News says growth is strong [Source](http://url)...". Do NOT rely on implicit citations.
 
         Return ONLY a JSON object with this structure:
         {{
@@ -128,9 +145,12 @@ class AIAnalyst:
                 result = response.json()
                 raw_content = result['choices'][0]['message']['content']
                 
+                # Clean up XML tags first (in case Grok still sends them)
+                cleaned_content = self._clean_text(raw_content)
+                
                 # Parse JSON and Reconstruct Markdown manually to lock the format
                 try:
-                    parsed = json.loads(raw_content)
+                    parsed = json.loads(cleaned_content)
                     v = parsed.get('verdict', 'N/A')
                     # Add Emoji to Verdict
                     if 'Agree' in v: v = "✅ " + v
@@ -145,7 +165,8 @@ class AIAnalyst:
                     )
                     return formatted
                 except:
-                    return raw_content.strip() # Fallback to raw if JSON fails
+                    # Fallback: return cleaned raw text if JSON parsing fails
+                    return cleaned_content.strip() 
             else:
                 print(f"⚠️ OpenRouter Error {response.status_code}")
                 return "AI Analysis failed (API Error)."
