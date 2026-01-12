@@ -2,6 +2,7 @@ import requests
 import os
 import json
 import re
+import time
 
 class AIAnalyst:
     def __init__(self):
@@ -18,7 +19,7 @@ class AIAnalyst:
         Converts <grok:render...><argument...>10</argument>...</grok:render> to [10].
         Also attempts to preserve any markdown links if they exist.
         """
-        if not text: return text
+        if not text or not isinstance(text, str): return text
         
         # 1. Aggressive XML Cleaner
         # Pattern A: Try to find citation_id
@@ -34,391 +35,279 @@ class AIAnalyst:
         
         return text
 
-    def get_analysis(self, ticker, analysis_data, backtest_config=None):
+    def _call_ai(self, messages, schema=None, max_retries=2, plugins=None):
         """
-        Sends technical data to LLM for a second opinion.
+        Unified method to call AI with retry logic and JSON schema support.
         """
         if not self.api_key:
-            return "AI Analysis skipped (No API Key provided)."
+            return None
 
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "HTTP-Referer": self.site_url,
+            "X-Title": self.app_name,
+            "Content-Type": "application/json"
+        }
+
+        # Prepare response format
+        response_format = {"type": "json_object"}
+        if schema:
+            response_format = {
+                "type": "json_schema",
+                "json_schema": schema
+            }
+
+        data = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": response_format,
+            "temperature": 0.5,
+            "max_tokens": 1000
+        }
+
+        if plugins:
+            data["plugins"] = plugins
+
+        for attempt in range(max_retries + 1):
+            try:
+                response = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers,
+                    data=json.dumps(data),
+                    timeout=45
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    content = result['choices'][0]['message']['content']
+                    
+                    # 1. Parse JSON
+                    parsed = json.loads(content)
+                    
+                    # 2. Clean all string fields in the parsed JSON (to preserve citations and remove XML)
+                    def clean_json(obj):
+                        if isinstance(obj, dict):
+                            return {k: clean_json(v) for k, v in obj.items()}
+                        elif isinstance(obj, list):
+                            return [clean_json(v) for v in obj]
+                        elif isinstance(obj, str):
+                            return self._clean_text(obj)
+                        return obj
+                    
+                    return clean_json(parsed)
+                
+                else:
+                    print(f"⚠️ AI API Error (Attempt {attempt+1}): {response.status_code} - {response.text}")
+            
+            except (json.JSONDecodeError, Exception) as e:
+                print(f"⚠️ AI Call Exception (Attempt {attempt+1}): {e}")
+            
+            if attempt < max_retries:
+                time.sleep(1.5 * (attempt + 1))
+                data["temperature"] += 0.1 # Increase entropy slightly on retry
+        
+        return None
+
+    def get_analysis(self, ticker, analysis_data, backtest_config=None):
+        """
+        Sends technical data to LLM for a second opinion using JSON Schema.
+        """
         signal = analysis_data['signal']
         price = analysis_data['price']
         
         # Language instruction
         lang_instruction = "Respond in English."
-        analysis_placeholder = "Your analysis text here..."
-        
         if self.language in ['zh', 'zh_tw', 'chinese']:
-            lang_instruction = "Respond in Traditional Chinese (繁體中文) for the **Analysis** section. **CRITICAL:** Keep the headers (**Verdict**, **Confidence**, **Sizing**) and financial terms (e.g., EMA, RSI, Risk/Reward) in English."
-            analysis_placeholder = "你的中文分析..."
+            lang_instruction = "Respond in Traditional Chinese (繁體中文) for the **analysis** field. **CRITICAL:** Keep financial terms (e.g., EMA, RSI) in English."
 
-        # Determine context (Live vs Backtest)
+        # Define Schema
+        schema = {
+            "name": "stock_analysis",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "verdict": { "type": "string", "description": "Agree, Disagree, or Caution" },
+                    "confidence": { "type": "string", "description": "Low, Medium, or High" },
+                    "sizing": { "type": "string", "description": "Aggressive, Standard, or Conservative" },
+                    "analysis": { "type": "string", "description": "Detailed reasoning with citations" }
+                },
+                "required": ["verdict", "confidence", "sizing", "analysis"]
+            }
+        }
+
+        # Context construction
         if backtest_config:
             sim_date = backtest_config.get('date')
             hist_news = backtest_config.get('news', [])
-            news_section = "\n".join(hist_news) if hist_news else "No specific news found for this period."
-            
-            context_instruction = f"""
-            *** SIMULATION MODE - STRICT KNOWLEDGE CUTOFF ***
-            CURRENT DATE: {sim_date}
-            
-            You are a Wall Street trader working on {sim_date}.
-            You MUST act as if you are living in that moment.
-            
-            RULES:
-            1. You have ZERO knowledge of the future. Do not mention anything that happens after {sim_date}.
-            2. Analyze the situation based ONLY on the Technical Indicators provided and the HISTORICAL NEWS below.
-            3. If the market sentiment is bearish ON THIS DATE, reflect that fear. Do not use your future knowledge of a recovery to be optimistic.
-            
-            HISTORICAL NEWS (Context available on {sim_date}):
-            {news_section}
-            """
-            web_plugin = [] # No web search in backtest
-            sys_role = f"You are a disciplined financial analyst working on {sim_date}. You strictly ignore all future events."
-            
+            news_section = "\n".join(hist_news) if hist_news else "No specific news found."
+            context = f"STRICT KNOWLEDGE CUTOFF: Act as if today is {sim_date}. Knowledge of the future is FORBIDDEN.\nRecent News: {news_section}"
+            plugins = None
         else:
-            # Live Mode
-            context_instruction = """
-            Use your WEB SEARCH capability to check for any recent news, earnings reports, or macro events 
-            that might affect this stock specifically.
-            """
-            web_plugin = [{"id": "web"}]
-            sys_role = "You are a concise financial analyst with web search capabilities."
+            context = "Use WEB SEARCH to check for any recent news or macro events affecting this stock."
+            plugins = [{"id": "web"}]
 
-        prompt = f"""
-        You are a senior algorithmic trader. Analyze the trade signal and return a JSON object.
+        messages = [
+            {"role": "system", "content": "You are a concise financial analyst outputting structured JSON."},
+            {"role": "user", "content": f"""
+                Analyze {ticker} at ${price:.2f}. Strategy suggests: {signal} ({analysis_data['reason']}).
+                Technical Data: EMA 20: ${analysis_data['ema']:.2f}, RSI 14: {analysis_data['rsi']:.1f}, Stop Loss: ${analysis_data['stop_loss']:.2f}.
+                
+                {context}
+                
+                Instructions:
+                1. Language: {lang_instruction}
+                2. CITATIONS: Use **[Source Name](URL)** format for all references within the 'analysis' field.
+                """}
+        ]
+
+        result = self._call_ai(messages, schema=schema, plugins=plugins)
         
-        {context_instruction}
-
-        Target: {ticker}
-        Current Price: ${price:.2f}
-        Signal: {signal}
-        Reason: {analysis_data['reason']}
-        
-        Technical Indicators:
-        - EMA 20: ${analysis_data['ema']:.2f}
-        - RSI 14: {analysis_data['rsi']:.1f}
-        - ATR Stop Loss: ${analysis_data['stop_loss']:.2f}
-        
-        **Smart Money / Event Context:**
-        - Avg Reaction: {analysis_data.get('event_stats', {}).get('avg_reaction', 0):.2f}%
-        - Win Rate: {analysis_data.get('event_stats', {}).get('win_rate', 0):.0f}%
-        - Insight: {analysis_data.get('event_stats', {}).get('message', 'N/A')}
-
-        Task:
-        1. **LANGUAGE:** {lang_instruction}
-        2. Evaluate technicals, news, and risk/reward.
-        3. Suggest Confidence and Sizing.
-        4. **CITATIONS:** You MUST provide the source URL for your claims. Use standard Markdown format: **[Source Name](URL)**. Example: "Revenue is up [Bloomberg](https://...)." Do NOT use bare brackets [1] unless you cannot find a URL.
-
-        Return ONLY a JSON object with this structure:
-        {{
-            "verdict": "Agree / Disagree / Caution",
-            "confidence": "Low / Medium / High",
-            "sizing": "Aggressive / Standard / Conservative",
-            "analysis": "{analysis_placeholder}"
-        }}
-        """
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "HTTP-Referer": self.site_url,
-            "X-Title": self.app_name,
-            "Content-Type": "application/json"
-        }
-
-        data = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": "You are a specialized financial analyst that only outputs JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            "response_format": { "type": "json_object" }, # Force JSON mode
-            "temperature": 0.5,
-            "max_tokens": 500
-        }
-        
-        if web_plugin:
-            data["plugins"] = web_plugin
-
-        try:
-            response = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers=headers,
-                data=json.dumps(data),
-                timeout=20
-            )
+        if result:
+            v = result['verdict']
+            if 'Agree' in v: v = "✅ " + v
+            elif 'Disagree' in v: v = "❌ " + v
+            elif 'Caution' in v: v = "⚠️ " + v
             
-            if response.status_code == 200:
-                result = response.json()
-                raw_content = result['choices'][0]['message']['content']
-                
-                # Clean up XML tags first (in case Grok still sends them)
-                cleaned_content = self._clean_text(raw_content)
-                
-                # Parse JSON and Reconstruct Markdown manually to lock the format
-                try:
-                    parsed = json.loads(cleaned_content)
-                    v = parsed.get('verdict', 'N/A')
-                    # Add Emoji to Verdict
-                    if 'Agree' in v: v = "✅ " + v
-                    elif 'Disagree' in v: v = "❌ " + v
-                    elif 'Caution' in v: v = "⚠️ " + v
-                    
-                    formatted = (
-                        f"**Verdict:** {v}\n"
-                        f"**Confidence:** {parsed.get('confidence', 'N/A')}\n"
-                        f"**Sizing:** {parsed.get('sizing', 'N/A')}\n"
-                        f"**Analysis:** {parsed.get('analysis', 'N/A')}"
-                    )
-                    return formatted
-                except:
-                    # Fallback: return cleaned raw text if JSON parsing fails
-                    return cleaned_content.strip() 
-            else:
-                print(f"⚠️ OpenRouter Error {response.status_code}")
-                return "AI Analysis failed (API Error)."
-                
-        except Exception as e:
-            print(f"⚠️ AI Analyst Exception: {e}")
-            return f"AI Analysis failed: {e}"
+            return (
+                f"**Verdict:** {v}\n"
+                f"**Confidence:** {result['confidence']}\n"
+                f"**Sizing:** {result['sizing']}\n"
+                f"**Analysis:** {result['analysis']}"
+            )
+        return "AI Analysis failed to provide structured output."
 
     def get_ticker_candidates(self):
         """
-        Asks the AI to find potential trending tickers based on news/sentiment.
-        Returns: List[str] of tickers.
+        Asks the AI to find potential trending tickers.
         """
-        if not self.api_key:
-            return []
-
-        prompt = """
-        You are a financial screener.
-        1. Use WEB SEARCH to identify 5-8 US stocks with strong momentum or upcoming catalysts.
-        2. Focus on liquid, mid-to-large cap stocks.
-        3. Return a JSON object with a 'candidates' key containing a list of ticker symbols.
-        
-        Example: {"candidates": ["NVDA", "AMD", "TSM"]}
-        """
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "HTTP-Referer": self.site_url,
-            "X-Title": self.app_name,
-            "Content-Type": "application/json"
+        schema = {
+            "name": "ticker_candidates",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "candidates": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
+                },
+                "required": ["candidates"]
+            }
         }
 
-        data = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": "You are a JSON-only financial data provider."},
-                {"role": "user", "content": prompt}
-            ],
-            "response_format": { "type": "json_object" },
-            "plugins": [{"id": "web"}],
-            "temperature": 0.5,
-            "max_tokens": 200
-        }
+        messages = [
+            {"role": "system", "content": "You are a financial screener."},
+            {"role": "user", "content": "Identify 5-8 US stocks with strong momentum or catalysts. Focus on liquid, mid-to-large cap stocks."}
+        ]
 
-        try:
-            print("  -> Asking AI for trending candidates...")
-            response = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers=headers,
-                data=json.dumps(data),
-                timeout=30
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                content = result['choices'][0]['message']['content']
-                parsed = json.loads(content)
-                return parsed.get('candidates', [])
-            return []
-                
-        except Exception as e:
-            print(f"⚠️ AI Candidate Search Exception: {e}")
-            return []
+        print("  -> Asking AI for trending candidates...")
+        result = self._call_ai(messages, schema=schema, plugins=[{"id": "web"}])
+        return result.get('candidates', []) if result else []
 
     def generate_recommendation_report(self, verified_picks, macro_data=None):
         """
-        verified_picks: List of dicts, each containing 'ticker' and 'analysis' (from strategy).
-        macro_data: Optional dict from MacroSentinel (regime, reason, etc).
+        verified_picks: List of dicts, each containing 'ticker' and 'analysis'.
         """
-        if not self.api_key or not verified_picks:
-            return None
-        
-        # Prepare data for AI
-        picks_summary = []
-        for item in verified_picks:
-            t = item['ticker']
-            a = item['analysis']
-            picks_summary.append({
-                "ticker": t,
-                "price": f"{a['price']:.2f}",
-                "signal": a['signal'],
-                "rsi": f"{a['rsi']:.1f}",
-                "reason": a['reason']
-            })
-        
-        # Macro Context Construction
-        macro_context = "Market Context: Unknown (Assume Neutral)"
+        if not verified_picks: return None
+
+        # Prepare Data
+        picks_data = [{
+            "ticker": p['ticker'],
+            "price": f"{p['analysis']['price']:.2f}",
+            "signal": p['analysis']['signal'],
+            "reason": p['analysis']['reason']
+        } for p in verified_picks]
+
+        macro_text = "N/A"
         if macro_data:
-            regime = macro_data.get('regime', 'NEUTRAL')
-            reason = macro_data.get('reason', 'N/A')
-            tnx = macro_data.get('tnx_current', 0)
-            dxy = macro_data.get('dxy_current', 0)
-            
-            macro_context = (
-                f"Regime: {regime}\n"
-                f"Reason: {reason}\n"
-                f"Yield: {tnx:.2f}%\n"
-                f"DXY: {dxy:.2f}"
-            )
+            macro_text = f"Regime: {macro_data['regime']}, Reason: {macro_data['reason']}"
+
+        schema = {
+            "name": "recommendation_report",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "market_summary": { "type": "string" },
+                    "picks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "ticker": { "type": "string" },
+                                "note": { "type": "string", "description": "Analyst perspective with citations" }
+                            },
+                            "required": ["ticker", "note"]
+                        }
+                    }
+                },
+                "required": ["market_summary", "picks"]
+            }
+        }
 
         lang_name = "Traditional Chinese (繁體中文)" if self.language in ['zh', 'zh_tw', 'chinese'] else "English"
 
-        prompt = f"""
-        You are a quantitative analyst. Create a weekly recommendation report.
-        
-        {macro_context}
-        
-        Validated Picks (Strategy Results):
-        {json.dumps(picks_summary, indent=2)}
-        
-        Task:
-        1. Write a 'market_summary' based on the Macro Regime.
-        2. For each pick in the list, write a concise 'analyst_note' combining technicals with recent news.
-        3. Use {lang_name} for the summary and notes.
+        messages = [
+            {"role": "system", "content": "You are a quantitative analyst."},
+            {"role": "user", "content": f"""
+                Macro Context: {macro_text}
+                Verified Strategy Picks: {json.dumps(picks_data)}
+                
+                Task:
+                1. Write a 'market_summary' based on the macro regime.
+                2. Write a 'note' for each pick combining technicals and web-searched news.
+                3. Language: {lang_name}.
+                4. CITATIONS: Use **[Source Name](URL)** format for references.
+                """}
+        ]
 
-        Return ONLY a JSON object:
-        {{
-            "market_summary": "...",
-            "picks": [
-                {{ "ticker": "...", "note": "..." }},
-                ...
-            ]
-        }}
-        """
+        print("  -> Asking AI to summarize verified picks...")
+        result = self._call_ai(messages, schema=schema, plugins=[{"id": "web"}], max_retries=2)
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "HTTP-Referer": self.site_url,
-            "X-Title": self.app_name,
-            "Content-Type": "application/json"
-        }
-
-        data = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": "You are a financial reporter that only outputs JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            "response_format": { "type": "json_object" },
-            "plugins": [{"id": "web"}],
-            "temperature": 0.5,
-            "max_tokens": 1000
-        }
-
-        try:
-            print("  -> Asking AI to summarize verified picks...")
-            response = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers=headers,
-                data=json.dumps(data),
-                timeout=45
-            )
+        if result:
+            summary_title = "市場機會：" if "Chinese" in lang_name else "Market Opportunity:"
+            report = f"**{summary_title}**\n{result['market_summary']}\n\n**🚀 Validated Picks:**\n\n"
             
-            if response.status_code == 200:
-                result = response.json()
-                content = result['choices'][0]['message']['content']
-                parsed = json.loads(content)
-                
-                # Reconstruct Markdown in Python to lock headers
-                summary_title = "市場機會：" if "Chinese" in lang_name else "Market Opportunity:"
-                report = f"**{summary_title}**\n{parsed.get('market_summary', '')}\n\n**🚀 Validated Picks:**\n\n"
-                
-                # Create a map for quick lookup of the original technical data
-                tech_map = {p['ticker']: p for p in picks_summary}
-                
-                for p in parsed.get('picks', []):
-                    ticker = p['ticker']
-                    note = p['note']
-                    tech = tech_map.get(ticker)
-                    
-                    if tech:
-                        report += f"1. **[{ticker}]** - ${tech['price']}\n"
-                        report += f"   - **Strategy:** {tech['signal']} (RSI: {tech['rsi']})\n"
-                        report += f"   - **Tech Setup:** {tech['reason']}\n"
-                        report += f"   - **Analyst Note:** {note}\n\n"
-                
-                return report.strip()
-            return None
-                
-        except Exception as e:
-            print(f"⚠️ AI Report Gen Exception: {e}")
-            return None
+            # Map original data for price/signal
+            tech_map = {p['ticker']: p for p in picks_data}
+            for p in result['picks']:
+                t = p['ticker']
+                tech = tech_map.get(t)
+                if tech:
+                    report += f"1. **[{t}]** - ${tech['price']}\n   - **Strategy:** {tech['signal']}\n   - **Analyst Note:** {p['note']}\n\n"
+            return report.strip()
+        
+        return None
 
     def analyze_alert(self, ticker, alert_data, news_context=None):
         """
-        Analyzes a sudden alert (e.g. Flash Crash) with news context.
+        Analyzes a sudden alert.
         """
-        if not self.api_key:
-            return None
-
         price_str = f"{alert_data.get('price', 0):.2f}"
         change_str = f"{alert_data.get('change', 0):.2f}"
-        news_text = news_context if news_context else "No recent news found via API."
+        news_text = news_context if news_context else "No news found via API."
 
-        prompt = (
-            "You are a financial news analyst.\n\n"
-            f"Event: {ticker} has triggered an alert.\n"
-            "Alert Details:\n"
-            f"{alert_data['msg']}\n"
-            f"Price: ${price_str} (Change: {change_str}%)\n\n"
-            "Recent News Headlines:\n"
-            f"{news_text}\n\n"
-            "Task:\n"
-            "1. Read the alert and the news (if any).\n"
-            "2. If news exists, explain if the news explains the price movement.\n"
-            "3. If no news, speculate on technical reasons or market sentiment.\n"
-            "4. Provide a very short (1-2 sentences) \"Reasoning\" for the user.\n\n"
-            "Output Format:\n"
-            "**AI Insight:** [Your explanation]"
-        )
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "HTTP-Referer": self.site_url,
-            "X-Title": self.app_name,
-            "Content-Type": "application/json"
+        schema = {
+            "name": "alert_analysis",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "insight": { "type": "string", "description": "1-2 sentence explanation of the event" }
+                },
+                "required": ["insight"]
+            }
         }
 
-        data = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": "You are a concise financial news analyst."},
-                {"role": "user", "content": prompt}
-            ],
-            "plugins": [{"id": "web"}], # Keep web access just in case
-            "temperature": 0.5,
-            "max_tokens": 200
-        }
+        messages = [
+            {"role": "system", "content": "You are a concise financial news analyst."},
+            {"role": "user", "content": f"Event: {ticker} Alert triggered.\nDetails: {alert_data['msg']}\nPrice: ${price_str} ({change_str}%)\nNews: {news_text}\n\nExplain if news correlates with price."}
+        ]
 
-        try:
-            print(f"  -> Asking AI to explain alert for {ticker}...")
-            response = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers=headers,
-                data=json.dumps(data),
-                timeout=20
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                content = result['choices'][0]['message']['content']
-                return self._clean_text(content.strip())
-            return None
-                
-        except Exception as e:
-            print(f"⚠️ AI Alert Analysis Exception: {e}")
-            return None
+        print(f"  -> Asking AI to explain alert for {ticker}...")
+        result = self._call_ai(messages, schema=schema, plugins=[{"id": "web"}])
+        
+        if result and 'insight' in result:
+            return f"**AI Insight:** {result['insight']}"
+        return "AI Analysis failed to provide an insight."
