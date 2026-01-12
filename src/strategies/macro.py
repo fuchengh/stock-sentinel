@@ -20,7 +20,7 @@ class MacroSentinel:
         """
         try:
             # Fetch last 10 days of data to see short-term trend
-            data = yf.download(self.tickers, period="10d", progress=False)
+            data = yf.download(self.tickers, period="10d", progress=False, threads=False)
             
             # yfinance returns a MultiIndex column structure if downloading multiple tickers.
             # Structure: Close -> Ticker

@@ -29,10 +29,12 @@ for k, v in config.items():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', type=str, default='WEEKLY', choices=['WEEKLY', 'DAILY'])
+    parser.add_argument('--debug', action='store_true', help='Force run ignoring market schedule')
     args = parser.parse_args()
     
     mode = args.mode
-    print(f"🚀 Starting Sentinel in {mode} mode.")
+    debug = args.debug
+    print(f"🚀 Starting Sentinel in {mode} mode.{' (DEBUG MODE ON)' if debug else ''}")
 
     # Fix for yfinance 'database is locked' in GitHub Actions
     # Set a unique cache directory for this run
@@ -77,10 +79,13 @@ def main():
             calendar = loader.get_calendar(start=today_str, end=today_str)
             
             if not calendar:
-                print("📅 Today is a market holiday. System sleeping.")
-                # Optional: Send Macro Report even on holidays?
-                # notifier.send_macro_report(macro_data) 
-                sys.exit(0)
+                if debug:
+                    print("📅 Today is a market holiday. DEBUG mode enabled: Forcing run.")
+                else:
+                    print("📅 Today is a market holiday. System sleeping.")
+                    # Optional: Send Macro Report even on holidays?
+                    # notifier.send_macro_report(macro_data) 
+                    sys.exit(0)
                 
             print(f"✅ Market is open (or valid trading day). Status: {'Open' if clock.is_open else 'Closed (After/Pre-market)'}")
     except Exception as e:
@@ -179,10 +184,8 @@ def main():
                 print(f"  -> Normal.")
 
     # 5. Send Notification
-    # Inject Macro Data into the results for the Notifier to see (only in DAILY mode)
-    # In WEEKLY mode, Macro info is integrated into the AI Recommendation report.
-    if mode == 'DAILY':
-        results['MACRO'] = macro_data
+    # Inject Macro Data into the results so Notifier sends the visual report in both modes.
+    results['MACRO'] = macro_data
         
     notifier.send_report(results)
 

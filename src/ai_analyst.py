@@ -21,15 +21,11 @@ class AIAnalyst:
         if not text: return text
         
         # 1. Aggressive XML Cleaner
-        # Matches <grok:render ...> ... </grok:render>
-        # We try to extract the number if it exists, otherwise just remove it.
-        
         # Pattern A: Try to find citation_id
-        pattern_id = r'<grok:render[^>]*>.*?<argument name="citation_id">\s*(\d+)\s*</argument>.*?</grok:render>'
+        pattern_id = r'<grok:render[^>]*>.*?<argument name="citation_id">(\\d+)</argument>.*?</grok:render>'
         text = re.sub(pattern_id, r' [\1] ', text, flags=re.DOTALL)
         
         # Pattern B: Cleanup any remaining grok tags that didn't match Pattern A
-        # (e.g. render_media, or different structure)
         pattern_residual = r'<grok:[^>]+>.*?</grok:[^>]+>'
         text = re.sub(pattern_residual, '', text, flags=re.DOTALL)
         
@@ -39,7 +35,76 @@ class AIAnalyst:
         return text
 
     def get_analysis(self, ticker, analysis_data, backtest_config=None):
-# ... (inside get_analysis prompt)
+        """
+        Sends technical data to LLM for a second opinion.
+        """
+        if not self.api_key:
+            return "AI Analysis skipped (No API Key provided)."
+
+        signal = analysis_data['signal']
+        price = analysis_data['price']
+        
+        # Language instruction
+        lang_instruction = "Respond in English."
+        analysis_placeholder = "Your analysis text here..."
+        
+        if self.language in ['zh', 'zh_tw', 'chinese']:
+            lang_instruction = "Respond in Traditional Chinese (繁體中文) for the **Analysis** section. **CRITICAL:** Keep the headers (**Verdict**, **Confidence**, **Sizing**) and financial terms (e.g., EMA, RSI, Risk/Reward) in English."
+            analysis_placeholder = "你的中文分析..."
+
+        # Determine context (Live vs Backtest)
+        if backtest_config:
+            sim_date = backtest_config.get('date')
+            hist_news = backtest_config.get('news', [])
+            news_section = "\n".join(hist_news) if hist_news else "No specific news found for this period."
+            
+            context_instruction = f"""
+            *** SIMULATION MODE - STRICT KNOWLEDGE CUTOFF ***
+            CURRENT DATE: {sim_date}
+            
+            You are a Wall Street trader working on {sim_date}.
+            You MUST act as if you are living in that moment.
+            
+            RULES:
+            1. You have ZERO knowledge of the future. Do not mention anything that happens after {sim_date}.
+            2. Analyze the situation based ONLY on the Technical Indicators provided and the HISTORICAL NEWS below.
+            3. If the market sentiment is bearish ON THIS DATE, reflect that fear. Do not use your future knowledge of a recovery to be optimistic.
+            
+            HISTORICAL NEWS (Context available on {sim_date}):
+            {news_section}
+            """
+            web_plugin = [] # No web search in backtest
+            sys_role = f"You are a disciplined financial analyst working on {sim_date}. You strictly ignore all future events."
+            
+        else:
+            # Live Mode
+            context_instruction = """
+            Use your WEB SEARCH capability to check for any recent news, earnings reports, or macro events 
+            that might affect this stock specifically.
+            """
+            web_plugin = [{"id": "web"}]
+            sys_role = "You are a concise financial analyst with web search capabilities."
+
+        prompt = f"""
+        You are a senior algorithmic trader. Analyze the trade signal and return a JSON object.
+        
+        {context_instruction}
+
+        Target: {ticker}
+        Current Price: ${price:.2f}
+        Signal: {signal}
+        Reason: {analysis_data['reason']}
+        
+        Technical Indicators:
+        - EMA 20: ${analysis_data['ema']:.2f}
+        - RSI 14: {analysis_data['rsi']:.1f}
+        - ATR Stop Loss: ${analysis_data['stop_loss']:.2f}
+        
+        **Smart Money / Event Context:**
+        - Avg Reaction: {analysis_data.get('event_stats', {}).get('avg_reaction', 0):.2f}%
+        - Win Rate: {analysis_data.get('event_stats', {}).get('win_rate', 0):.0f}%
+        - Insight: {analysis_data.get('event_stats', {}).get('message', 'N/A')}
+
         Task:
         1. **LANGUAGE:** {lang_instruction}
         2. Evaluate technicals, news, and risk/reward.
@@ -198,12 +263,17 @@ class AIAnalyst:
         # Macro Context Construction
         macro_context = "Market Context: Unknown (Assume Neutral)"
         if macro_data:
-            macro_context = f"""
-            Regime: {macro_data.get('regime', 'NEUTRAL')}
-            Reason: {macro_data.get('reason', 'N/A')}
-            Yield: {macro_data.get('tnx_current', 0):.2f}%
-            DXY: {macro_data.get('dxy_current', 0):.2f}
-            """
+            regime = macro_data.get('regime', 'NEUTRAL')
+            reason = macro_data.get('reason', 'N/A')
+            tnx = macro_data.get('tnx_current', 0)
+            dxy = macro_data.get('dxy_current', 0)
+            
+            macro_context = (
+                f"Regime: {regime}\n"
+                f"Reason: {reason}\n"
+                f"Yield: {tnx:.2f}%\n"
+                f"DXY: {dxy:.2f}"
+            )
 
         lang_name = "Traditional Chinese (繁體中文)" if self.language in ['zh', 'zh_tw', 'chinese'] else "English"
 
@@ -295,26 +365,26 @@ class AIAnalyst:
         if not self.api_key:
             return None
 
-        prompt = f"""
-        You are a financial news analyst.
-        
-        Event: {ticker} has triggered an alert.
-        Alert Details:
-        {alert_data['msg']}
-        Price: ${alert_data.get('price', 0):.2f} (Change: {alert_data.get('change', 0):.2f}%)
-        
-        Recent News Headlines:
-        {news_context if news_context else "No recent news found via API."}
-        
-        Task:
-        1. Read the alert and the news (if any).
-        2. If news exists, explain if the news explains the price movement.
-        3. If no news, speculate on technical reasons or market sentiment.
-        4. Provide a very short (1-2 sentences) "Reasoning" for the user.
+        price_str = f"{alert_data.get('price', 0):.2f}"
+        change_str = f"{alert_data.get('change', 0):.2f}"
+        news_text = news_context if news_context else "No recent news found via API."
 
-        Output Format:
-        **AI Insight:** [Your explanation]
-        """
+        prompt = (
+            "You are a financial news analyst.\n\n"
+            f"Event: {ticker} has triggered an alert.\n"
+            "Alert Details:\n"
+            f"{alert_data['msg']}\n"
+            f"Price: ${price_str} (Change: {change_str}%)\n\n"
+            "Recent News Headlines:\n"
+            f"{news_text}\n\n"
+            "Task:\n"
+            "1. Read the alert and the news (if any).\n"
+            "2. If news exists, explain if the news explains the price movement.\n"
+            "3. If no news, speculate on technical reasons or market sentiment.\n"
+            "4. Provide a very short (1-2 sentences) \"Reasoning\" for the user.\n\n"
+            "Output Format:\n"
+            "**AI Insight:** [Your explanation]"
+        )
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -346,10 +416,9 @@ class AIAnalyst:
             if response.status_code == 200:
                 result = response.json()
                 content = result['choices'][0]['message']['content']
-                return content.strip()
+                return self._clean_text(content.strip())
             return None
                 
         except Exception as e:
             print(f"⚠️ AI Alert Analysis Exception: {e}")
             return None
-
