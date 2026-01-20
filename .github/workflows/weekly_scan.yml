@@ -62,5 +62,5 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
           AI_LANGUAGE: ${{ vars.AI_LANGUAGE }}
-          WATCHLIST: ${{ secrets.WATCHLIST }}
+          WATCHLIST: ${{ vars.WATCHLIST }}
         run: python -m src.main --mode $MODE
