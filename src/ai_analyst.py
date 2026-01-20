@@ -288,6 +288,11 @@ class AIAnalyst:
         change_str = f"{alert_data.get('change', 0):.2f}"
         news_text = news_context if news_context else "No news found via API."
 
+        # Language instruction
+        lang_instruction = "Respond in English."
+        if self.language in ['zh', 'zh_tw', 'chinese']:
+            lang_instruction = "Respond in Traditional Chinese (繁體中文). Keep financial terms and ticker symbols in English."
+
         schema = {
             "name": "alert_analysis",
             "strict": True,
@@ -301,7 +306,7 @@ class AIAnalyst:
         }
 
         messages = [
-            {"role": "system", "content": "You are a concise financial news analyst."},
+            {"role": "system", "content": f"You are a concise financial news analyst. {lang_instruction}"},
             {"role": "user", "content": f"Event: {ticker} Alert triggered.\nDetails: {alert_data['msg']}\nPrice: ${price_str} ({change_str}%)\nNews: {news_text}\n\nExplain if news correlates with price."}
         ]
 
